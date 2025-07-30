@@ -1,9 +1,14 @@
 const express = require('express');
-const nodemailer = require('nodemailer');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
+
+// Require the SendGrid library
+const sgMail = require('@sendgrid/mail');
+
+// Set the SendGrid API Key
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
 
@@ -13,23 +18,14 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173'
 }));
 
-// Rate limiting
+// Rate limiting for email endpoints
 const emailLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
-  message: 'Too many emails sent, please try again later.'
+  message: 'Too many emails sent from this IP, please try again later.'
 });
 
 app.use(express.json());
-
-// Email transporter setup
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
 
 // Job application endpoint
 app.post('/api/job-application', emailLimiter, async (req, res) => {
@@ -40,7 +36,7 @@ app.post('/api/job-application', emailLimiter, async (req, res) => {
       department,
       referenceNumber,
       advertisementSource,
-      
+
       // Personal details
       title,
       lastName,
@@ -51,32 +47,32 @@ app.post('/api/job-application', emailLimiter, async (req, res) => {
       workPhone,
       mobilePhone,
       email,
-      
+
       // Additional info
       hasDriversLicense,
       hasMedicalCondition,
       hasWorkRestrictions,
       noticeRequired,
-      
+
       // Employment records
       employmentRecords,
-      
+
       // Education records
       educationRecords,
-      
+
       // Training records
       trainingRecords,
-      
+
       // Experience and skills
       experienceSkills,
-      
+
       // References
       references,
-      
+
       // Legal
       hasCriminalConvictions,
       drugAlcoholPolicyAcknowledged,
-      
+
       // Optional attachments
       resume,
       additionalDocuments
@@ -141,33 +137,38 @@ app.post('/api/job-application', emailLimiter, async (req, res) => {
         `).join('');
     };
 
-    // Prepare attachments
-    const attachments = [];
+    // Prepare attachments for SendGrid
+    const sgAttachments = [];
     if (resume) {
-      attachments.push({
+      sgAttachments.push({
+        content: resume, // Base64 encoded string
         filename: 'resume.pdf',
-        content: resume
+        type: 'application/pdf',
+        disposition: 'attachment',
       });
     }
     if (additionalDocuments && additionalDocuments.length > 0) {
       additionalDocuments.forEach((doc, index) => {
-        attachments.push({
+        // Assuming doc.content is Base64 and doc.filename exists
+        sgAttachments.push({
+          content: doc.content,
           filename: doc.filename || `document_${index + 1}.pdf`,
-          content: doc.content
+          type: doc.type || 'application/octet-stream', // Default to generic if type not provided
+          disposition: 'attachment',
         });
       });
     }
 
-    await transporter.sendMail({
-      from: process.env.SMTP_USER,
-      to: process.env.HR_EMAIL,
+    const msg = {
+      to: process.env.HR_EMAIL, // Your HR email address
+      from: process.env.SENDGRID_SENDER_EMAIL, // Must be a verified sender in SendGrid
       subject: `New Job Application: ${jobTitle} - ${firstName} ${lastName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; background-color: #000000; color: #ffffff; padding: 20px;">
           <h1 style="color: #FFD700; border-bottom: 2px solid #FFD700; padding-bottom: 10px; margin-top: 0;">
             New Job Application
           </h1>
-          
+
           <h2 style="color: #FFD700; margin-top: 30px;">Position Applied For</h2>
           <div style="background-color: #1a1a1a; padding: 15px; border-radius: 5px; border: 1px solid #FFD700;">
             <p style="color: #ffffff;"><strong style="color: #FFD700;">Job Title:</strong> ${jobTitle}</p>
@@ -247,19 +248,21 @@ app.post('/api/job-application', emailLimiter, async (req, res) => {
           </div>
         </div>
       `,
-      attachments: attachments
-    });
+      attachments: sgAttachments,
+    };
 
-    res.json({ 
-      success: true, 
-      message: 'Application submitted successfully!' 
+    await sgMail.send(msg);
+
+    res.json({
+      success: true,
+      message: 'Application submitted successfully!'
     });
 
   } catch (error) {
-    console.error('Email error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to submit application. Please try again.' 
+    console.error('SendGrid Email Error (Job Application):', error.response ? error.response.body : error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit application. Please try again.'
     });
   }
 });
@@ -269,9 +272,9 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
   try {
     const { name, email, phone, company, projectType, message } = req.body;
 
-    const info = await transporter.sendMail({
-      from: process.env.SMTP_USER,
-      to: process.env.CONTACT_EMAIL,
+    const msg = {
+      to: process.env.CONTACT_EMAIL, // Your contact email address
+      from: process.env.SENDGRID_SENDER_EMAIL, // Must be a verified sender in SendGrid
       subject: `Contact Form: ${projectType} Project`,
       html: `
         <!DOCTYPE html>
@@ -286,7 +289,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               padding: 0;
               box-sizing: border-box;
             }
-            
+
             body {
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
               line-height: 1.6;
@@ -295,7 +298,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               min-height: 100vh;
               padding: 40px 20px;
             }
-            
+
             .container {
               max-width: 700px;
               margin: 0 auto;
@@ -306,7 +309,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               box-shadow: 0 30px 60px -12px rgb(0, 0, 0), 0 0 0 1px rgb(234, 179, 8), inset 0 1px 0 rgb(234, 179, 8);
               position: relative;
             }
-            
+
             .container::before {
               content: '';
               position: absolute;
@@ -317,7 +320,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               background: linear-gradient(90deg, rgb(234, 179, 8) 0%, rgb(255, 215, 0) 50%, rgb(234, 179, 8) 100%);
               z-index: 10;
             }
-            
+
             .header {
               background: linear-gradient(135deg, rgb(0, 0, 0) 0%, rgb(20, 20, 20) 50%, rgb(0, 0, 0) 100%);
               padding: 40px 32px;
@@ -326,7 +329,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-            
+
             .header::after {
               content: '';
               position: absolute;
@@ -336,7 +339,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               height: 1px;
               background: linear-gradient(90deg, transparent 0%, rgb(234, 179, 8) 50%, transparent 100%);
             }
-            
+
             .header::before {
               content: '';
               position: absolute;
@@ -348,12 +351,12 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               opacity: 0.4;
               z-index: 0;
             }
-            
+
             .header-content {
               position: relative;
               z-index: 1;
             }
-            
+
             .badge {
               display: inline-block;
               padding: 10px 20px;
@@ -370,7 +373,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-            
+
             .badge::before {
               content: '';
               position: absolute;
@@ -382,12 +385,12 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               opacity: 0.3;
               animation: shimmer 3s infinite;
             }
-            
+
             @keyframes shimmer {
               0% { left: -100%; }
               100% { left: 100%; }
             }
-            
+
             .title {
               font-size: 42px;
               font-weight: 900;
@@ -397,7 +400,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               letter-spacing: -0.5px;
               text-shadow: 0 2px 10px rgba(234, 179, 8, 0.5);
             }
-            
+
             .subtitle {
               color: rgb(255, 255, 255);
               font-size: 20px;
@@ -406,12 +409,12 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               letter-spacing: 2px;
               opacity: 0.9;
             }
-            
+
             .content {
               padding: 40px;
               background: linear-gradient(135deg, rgb(0, 0, 0) 0%, rgb(10, 10, 10) 100%);
             }
-            
+
             .field-group {
               margin-bottom: 28px;
               background: linear-gradient(135deg, rgb(0, 0, 0) 0%, rgb(15, 15, 15) 100%);
@@ -422,7 +425,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-            
+
             .field-group::before {
               content: '';
               position: absolute;
@@ -433,13 +436,13 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               background: linear-gradient(90deg, transparent 0%, rgb(255, 215, 0) 50%, transparent 100%);
               opacity: 0.6;
             }
-            
+
             .field-group:hover {
               border-color: rgb(255, 215, 0);
               box-shadow: 0 12px 35px -8px rgb(234, 179, 8), 0 0 0 1px rgb(234, 179, 8);
               transform: translateY(-2px);
             }
-            
+
             .field-label {
               display: block;
               color: rgb(234, 179, 8);
@@ -450,7 +453,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               margin-bottom: 12px;
               position: relative;
             }
-            
+
             .field-label::after {
               content: '';
               position: absolute;
@@ -461,7 +464,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               background: linear-gradient(90deg, rgb(234, 179, 8), rgb(255, 215, 0));
               border-radius: 1px;
             }
-            
+
             .field-value {
               color: rgb(255, 255, 255);
               font-size: 17px;
@@ -469,7 +472,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               word-wrap: break-word;
               line-height: 1.6;
             }
-            
+
             .message-field {
               background: linear-gradient(135deg, rgb(0, 0, 0) 0%, rgb(15, 15, 15) 100%);
               border: 2px solid rgb(234, 179, 8);
@@ -478,7 +481,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-            
+
             .message-field::before {
               content: '';
               position: absolute;
@@ -489,12 +492,12 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               background: linear-gradient(90deg, transparent 0%, rgb(255, 215, 0) 50%, transparent 100%);
               opacity: 0.6;
             }
-            
+
             .message-field .field-value {
               line-height: 1.7;
               white-space: pre-wrap;
             }
-            
+
             .stats-grid {
               display: grid;
               grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -504,7 +507,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               border-top: 2px solid rgb(234, 179, 8);
               position: relative;
             }
-            
+
             .stats-grid::before {
               content: '';
               position: absolute;
@@ -515,7 +518,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               height: 2px;
               background: linear-gradient(90deg, transparent 0%, rgb(255, 215, 0) 50%, transparent 100%);
             }
-            
+
             .stat-card {
               background: linear-gradient(135deg, rgb(0, 0, 0) 0%, rgb(20, 20, 20) 100%);
               border: 2px solid rgb(234, 179, 8);
@@ -526,7 +529,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               position: relative;
               overflow: hidden;
             }
-            
+
             .stat-card::before {
               content: '';
               position: absolute;
@@ -537,18 +540,18 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               background: linear-gradient(90deg, transparent 0%, rgb(255, 215, 0) 50%, transparent 100%);
               opacity: 0.8;
             }
-            
+
             .stat-card:hover {
               transform: translateY(-3px);
               box-shadow: 0 15px 40px -10px rgb(234, 179, 8), 0 0 0 1px rgb(255, 215, 0);
               border-color: rgb(255, 215, 0);
             }
-            
+
             .stat-icon {
               font-size: 24px;
               margin-bottom: 8px;
             }
-            
+
             .stat-label {
               color: rgb(255, 255, 255);
               font-size: 12px;
@@ -556,43 +559,43 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
               letter-spacing: 0.5px;
               margin-bottom: 4px;
             }
-            
+
             .stat-value {
               color: rgb(234, 179, 8);
               font-size: 18px;
               font-weight: 700;
             }
-            
+
             .footer {
               background: rgb(0, 0, 0);
               padding: 24px 32px;
               text-align: center;
               border-top: 1px solid rgb(234, 179, 8);
             }
-            
+
             .footer-text {
               color: rgb(255, 255, 255);
               font-size: 14px;
             }
-            
+
             .highlight {
               color: rgb(234, 179, 8);
               font-weight: 600;
             }
-            
+
             @media (max-width: 600px) {
               .container {
                 margin: 0 10px;
               }
-              
+
               .title {
                 font-size: 28px;
               }
-              
+
               .content, .header {
                 padding: 24px;
               }
-              
+
               .stats-grid {
                 grid-template-columns: 1fr;
               }
@@ -608,7 +611,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
                 <p class="subtitle">C&C Construction & Electrical</p>
               </div>
             </div>
-            
+
             <div class="content">
               <div class="field-group">
                 <span class="field-label">Contact Information</span>
@@ -618,26 +621,26 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
                   📞 ${phone}
                 </div>
               </div>
-              
+
               ${company ? `
               <div class="field-group">
                 <span class="field-label">Company</span>
                 <div class="field-value">${company}</div>
               </div>
               ` : ''}
-              
+
               <div class="field-group">
                 <span class="field-label">Project Type</span>
                 <div class="field-value">
                   <span class="highlight">${projectType}</span>
                 </div>
               </div>
-              
+
               <div class="message-field">
                 <span class="field-label">Message</span>
                 <div class="field-value">${message}</div>
               </div>
-              
+
               <div class="stats-grid">
                 <div class="stat-card">
                   <div class="stat-icon">⚡</div>
@@ -656,7 +659,7 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
                 </div>
               </div>
             </div>
-            
+
             <div class="footer">
               <p class="footer-text">
                 Respond promptly to maintain our <span class="highlight">99.8% client satisfaction</span> rate
@@ -666,14 +669,16 @@ app.post('/api/contact', emailLimiter, async (req, res) => {
         </body>
         </html>
       `,
-      replyTo: email
-    });
+      replyTo: email,
+    };
 
-    console.log('Email sent successfully:', info.messageId);
+    await sgMail.send(msg);
+
+    console.log('SendGrid Email sent successfully (Contact Form)!');
 
     res.json({ success: true, message: 'Message sent successfully!' });
   } catch (error) {
-    console.error('Email error:', error);
+    console.error('SendGrid Email Error (Contact Form):', error.response ? error.response.body : error);
     res.status(500).json({ success: false, message: 'Failed to send message' });
   }
 });
