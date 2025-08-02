@@ -17,6 +17,7 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
 }));
+app.set('trust proxy', 2);
 
 // Rate limiting for email endpoints
 const emailLimiter = rateLimit({
